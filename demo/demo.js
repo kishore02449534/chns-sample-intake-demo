@@ -8,9 +8,29 @@ const SHEET_COLUMNS = [
     { key: "breed", label: "Breed / Cultivar" },
     { key: "practice", label: "Practice" },
     { key: "farmName", label: "Farm Name" },
+    { key: "storage", label: "Storage Location Master", defaultValue: "-80 Freezer A" },
 ];
 
 const CHECK_EVERY_MINUTES = 60;
+const LAB_TIME_ZONE = "America/Denver";
+const SOURCE_DESCRIPTION = "Box file 1350482221";
+const FILE_NAME = "Sample_Master_File.xlsx";
+
+const BUTTON_BASE =
+    "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 h-10 px-4 py-2";
+const BUTTON_PRIMARY = `${BUTTON_BASE} bg-primary text-primary-foreground hover:bg-primary/90`;
+const BUTTON_OUTLINE = `${BUTTON_BASE} border border-input bg-background hover:bg-accent hover:text-accent-foreground`;
+const BUTTON_DESTRUCTIVE = `${BUTTON_BASE} bg-destructive text-destructive-foreground hover:bg-destructive/90`;
+
+const ICON_START = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"`;
+const ICONS = {
+    refresh: `${ICON_START} class="lucide lucide-refresh-cw mr-2 h-4 w-4"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path><path d="M8 16H3v5"></path></svg>`,
+    loader: `${ICON_START} class="lucide lucide-loader-circle mr-2 h-4 w-4 animate-spin"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>`,
+    chevronRight: `${ICON_START} class="lucide lucide-chevron-right mr-1 h-4 w-4"><path d="m9 18 6-6-6-6"></path></svg>`,
+    chevronDown: `${ICON_START} class="lucide lucide-chevron-down mr-1 h-4 w-4"><path d="m6 9 6 6 6-6"></path></svg>`,
+    upload: `${ICON_START} class="lucide lucide-upload mr-2 h-4 w-4"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" x2="12" y1="3" y2="15"></line></svg>`,
+    close: `${ICON_START} class="lucide lucide-x h-4 w-4"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>`,
+};
 
 const demoState = {
     skippedMinutes: 0,
@@ -25,15 +45,28 @@ const demoState = {
     liveSamples: [],
     farmCards: [],
     heldRows: [],
+    rejectedCodes: new Set(),
     latestCheck: null,
     nextCheckAt: null,
-    history: [],
+    recentUploads: [],
     nextRowId: 1,
     nextCardId: 1,
     goodExampleIndex: 0,
     problemExampleIndex: 0,
-    openCardId: null,
+    checking: false,
+    showManualUpload: false,
+    showHistory: false,
+    openCard: null,
+    toastTimer: null,
 };
+
+function currentTime() {
+    return addMinutes(new Date(), demoState.skippedMinutes);
+}
+
+function addMinutes(when, minutes) {
+    return new Date(when.getTime() + minutes * 60000);
+}
 
 function compactKey(text) {
     return String(text || "").toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -51,23 +84,19 @@ function escapeHtml(text) {
         .replace(/"/g, "&quot;");
 }
 
-function currentTime() {
-    return addMinutes(new Date(), demoState.skippedMinutes);
-}
-
-function addMinutes(when, minutes) {
-    return new Date(when.getTime() + minutes * 60000);
-}
-
 function shortDate(when) {
-    const month = String(when.getMonth() + 1).padStart(2, "0");
-    const day = String(when.getDate()).padStart(2, "0");
-    return `${month}/${day}/${when.getFullYear()}`;
+    return when.toLocaleDateString("en-US", { timeZone: LAB_TIME_ZONE });
 }
 
 function shortDateTime(when) {
-    const clockTime = when.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-    return `${shortDate(when)}, ${clockTime}`;
+    return when.toLocaleString("en-US", {
+        timeZone: LAB_TIME_ZONE,
+        month: "numeric",
+        day: "numeric",
+        year: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+    });
 }
 
 function samplesWord(count) {
@@ -93,7 +122,7 @@ function readDate(text) {
     } else {
         return null;
     }
-    const parsed = new Date(year, month - 1, day);
+    const parsed = new Date(year, month - 1, day, 12);
     if (parsed.getMonth() !== month - 1 || parsed.getDate() !== day) return null;
     return parsed;
 }
@@ -101,7 +130,7 @@ function readDate(text) {
 function makeSheetRow(cellValues) {
     const cells = {};
     SHEET_COLUMNS.forEach((column, columnIndex) => {
-        cells[column.key] = cellValues[columnIndex] || "";
+        cells[column.key] = cellValues[columnIndex] ?? column.defaultValue ?? "";
     });
     const sheetRow = { rowId: demoState.nextRowId, cells };
     demoState.nextRowId += 1;
@@ -217,11 +246,11 @@ function checkOneRow(cells) {
             bfiCode: codeKey(cells.bfiCode),
             tubeLabel: cells.tubeLabel.trim(),
             farmName: farm.farmName,
-            farmLocation: farm.location,
             sampleType,
             foodDescription: `${food.foodName}, ${breed}, ${cut}`,
             practices,
             receivedDate,
+            storage: cells.storage.trim(),
         },
     };
 }
@@ -230,16 +259,11 @@ function looksLikeSample(cells) {
     return ["bfiCode", "tubeLabel", "farmName", "category", "species"].some((cellKey) => cells[cellKey].trim());
 }
 
-function codesInUse() {
+function checkSavedFile() {
     const liveCodes = new Set(demoState.liveSamples.map((sample) => sample.bfiCode));
     const waitingCodes = new Set(demoState.waitingSamples.map((sample) => sample.bfiCode));
-    return { liveCodes, waitingCodes };
-}
-
-function checkSavedFile() {
-    const { liveCodes, waitingCodes } = codesInUse();
     const sampleRows = demoState.savedRows
-        .map((sheetRow, rowIndex) => ({ sheetRowNumber: rowIndex + 2, cells: sheetRow.cells }))
+        .map((sheetRow, rowIndex) => ({ sheetRowNumber: rowIndex + 4, cells: sheetRow.cells }))
         .filter((sheetRow) => looksLikeSample(sheetRow.cells));
 
     const rowsByCode = new Map();
@@ -250,7 +274,7 @@ function checkSavedFile() {
         rowsByCode.get(key).push(sheetRow.sheetRowNumber);
     });
 
-    const outcome = { oldRows: 0, alreadyWaiting: 0, alreadyLive: 0, ready: [], held: [] };
+    const outcome = { oldRows: 0, alreadyInSystem: 0, ready: [], held: [] };
     sampleRows.forEach((sheetRow) => {
         const key = codeKey(sheetRow.cells.bfiCode);
         const heldRow = (reasons) => ({ sheetRowNumber: sheetRow.sheetRowNumber, bfiCode: key, reasons });
@@ -258,10 +282,8 @@ function checkSavedFile() {
             outcome.held.push(heldRow(["BFI_Code is empty."]));
         } else if (demoState.existingCodes.has(key)) {
             outcome.oldRows += 1;
-        } else if (liveCodes.has(key)) {
-            outcome.alreadyLive += 1;
-        } else if (waitingCodes.has(key)) {
-            outcome.alreadyWaiting += 1;
+        } else if (liveCodes.has(key) || waitingCodes.has(key)) {
+            outcome.alreadyInSystem += 1;
         } else if (rowsByCode.get(key).length > 1) {
             const rowList = rowsByCode.get(key).join(", ");
             outcome.held.push(heldRow([`BFI_Code ${key} appears more than once in the file (rows ${rowList}).`]));
@@ -277,39 +299,36 @@ function checkSavedFile() {
 function pendingCardForFarm(farmName) {
     const existingCard = demoState.farmCards.find((farmCard) => farmCard.farmName === farmName && farmCard.status === "waiting");
     if (existingCard) return existingCard;
-    const newCard = { cardId: demoState.nextCardId, farmName, status: "waiting", createdAt: currentTime() };
+    const newCard = { cardId: demoState.nextCardId, farmName, status: "waiting" };
     demoState.nextCardId += 1;
     demoState.farmCards.push(newCard);
     return newCard;
 }
 
 function addToInbox(readySamples) {
-    const farmsTouched = new Map();
     readySamples.forEach((sample) => {
         const farmCard = pendingCardForFarm(sample.farmName);
+        demoState.rejectedCodes.delete(sample.bfiCode);
         demoState.waitingSamples.push({ ...sample, cardId: farmCard.cardId });
-        farmsTouched.set(sample.farmName, (farmsTouched.get(sample.farmName) || 0) + 1);
     });
-    return farmsTouched;
 }
 
-function runCheck(checkKind) {
+function runCheck() {
     const checkedAt = currentTime();
     const fileChanged = demoState.fileVersion !== demoState.lastSeenVersion;
     let message = "No change since the last check.";
 
     if (fileChanged) {
         const outcome = checkSavedFile();
-        const farmsTouched = addToInbox(outcome.ready);
+        addToInbox(outcome.ready);
         demoState.heldRows = outcome.held;
         demoState.lastSeenVersion = demoState.fileVersion;
-        message = `${samplesWord(outcome.ready.length).replace("sample", "new sample")} added to the Sample Inbox, ${rowsWord(outcome.held.length)} ${outcome.held.length === 1 ? "needs" : "need"} fixing.`;
-        if (outcome.ready.length === 0 && outcome.held.length === 0) message = "The file changed, but there were no new rows.";
-        const farmList = [...farmsTouched.entries()].map(([farmName, count]) => `${farmName} (${samplesWord(count)})`);
-        demoState.history.unshift({
-            when: checkedAt,
-            who: checkKind === "automatic" ? "Automatic check" : "Check now",
-            text: farmList.length > 0 ? `${message} ${farmList.join(", ")}.` : message,
+        const heldVerb = outcome.held.length === 1 ? "needs" : "need";
+        message = `${samplesWord(outcome.ready.length).replace("sample", "new sample")} added to the Sample Inbox, ${rowsWord(outcome.held.length)} ${heldVerb} fixing.`;
+        demoState.recentUploads.unshift({
+            uploadedAt: checkedAt,
+            uploadedBy: "",
+            summary: `${outcome.ready.length} new, ${outcome.held.length} held back, ${outcome.alreadyInSystem} already in the system`,
         });
     }
 
@@ -318,20 +337,37 @@ function runCheck(checkKind) {
     renderAll();
 }
 
+function pressCheckNow() {
+    if (demoState.checking) return;
+    demoState.checking = true;
+    renderStatusArea();
+    window.setTimeout(() => {
+        demoState.checking = false;
+        runCheck();
+    }, 700);
+}
+
+function skipAheadOneHour() {
+    const minutesToNextCheck = Math.max(1, Math.ceil((demoState.nextCheckAt - currentTime()) / 60000));
+    demoState.skippedMinutes += minutesToNextCheck;
+    runCheck();
+    showToast(`It is now ${shortDateTime(currentTime())}. The hourly check ran by itself.`);
+}
+
 function saveSheet() {
     demoState.savedRows = copyRows(demoState.sheetRows);
     demoState.fileVersion += 1;
     demoState.fileSavedAt = currentTime();
     demoState.unsavedChanges = false;
-    renderAll();
+    renderSheet();
+    showToast("Saved to Box. Close the file and press Check now, or wait for the hourly check.");
 }
 
 function nextBfiCode() {
     const usedNumbers = demoState.sheetRows
         .map((sheetRow) => Number((sheetRow.cells.bfiCode.match(/(\d+)\s*$/) || [])[1]))
         .filter((number) => Number.isFinite(number));
-    const highest = Math.max(9100, ...usedNumbers);
-    return `BFI-${highest + 1}`;
+    return `BFI-${Math.max(9100, ...usedNumbers) + 1}`;
 }
 
 function addRow(example) {
@@ -350,9 +386,9 @@ function addRow(example) {
     ];
     demoState.sheetRows.push(makeSheetRow(cellValues));
     demoState.unsavedChanges = true;
-    renderAll();
+    renderSheet();
     const tableWrap = document.querySelector("#sheet-table-wrap");
-    if (tableWrap) tableWrap.scrollTop = tableWrap.scrollHeight;
+    tableWrap.scrollTop = tableWrap.scrollHeight;
 }
 
 function addGoodExample() {
@@ -370,62 +406,44 @@ function addProblemExample() {
 function removeRow(rowId) {
     demoState.sheetRows = demoState.sheetRows.filter((sheetRow) => sheetRow.rowId !== rowId);
     demoState.unsavedChanges = true;
-    renderAll();
+    renderSheet();
 }
 
-function skipAheadOneHour() {
-    const minutesToNextCheck = Math.max(1, Math.ceil((demoState.nextCheckAt - currentTime()) / 60000));
-    demoState.skippedMinutes += minutesToNextCheck;
-    runCheck("automatic");
+function cardSamples(cardId) {
+    return demoState.waitingSamples.filter((sample) => sample.cardId === cardId);
 }
 
 function approveCard(cardId) {
     const farmCard = demoState.farmCards.find((knownCard) => knownCard.cardId === cardId);
-    const cardSamples = demoState.waitingSamples.filter((sample) => sample.cardId === cardId);
+    const approvedSamples = cardSamples(cardId);
     const projectName = `${farmCard.farmName} samples ${shortDate(currentTime())}`;
-    cardSamples.forEach((sample) => {
-        demoState.liveSamples.push({ ...sample, projectName, approvedAt: currentTime() });
-    });
+    approvedSamples.forEach((sample) => demoState.liveSamples.push({ ...sample, projectName }));
     demoState.waitingSamples = demoState.waitingSamples.filter((sample) => sample.cardId !== cardId);
     farmCard.status = "approved";
-    demoState.history.unshift({
-        when: currentTime(),
-        who: "Approve",
-        text: `${samplesWord(cardSamples.length)} from ${farmCard.farmName} approved. Project "${projectName}" created.`,
-    });
-    closeCard();
+    demoState.openCard = { cardId, farmName: farmCard.farmName, approvedSamples, projectName, confirmingReject: false };
     renderAll();
-    document.querySelector("#live-samples").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function rejectCard(cardId) {
     const farmCard = demoState.farmCards.find((knownCard) => knownCard.cardId === cardId);
-    const cardSamples = demoState.waitingSamples.filter((sample) => sample.cardId === cardId);
-    const confirmed = window.confirm(
-        `Reject ${samplesWord(cardSamples.length)} from ${farmCard.farmName}? They are removed from the Sample Inbox and nothing goes live.`,
-    );
-    if (!confirmed) return;
+    cardSamples(cardId).forEach((sample) => demoState.rejectedCodes.add(sample.bfiCode));
     demoState.waitingSamples = demoState.waitingSamples.filter((sample) => sample.cardId !== cardId);
     farmCard.status = "rejected";
-    demoState.history.unshift({
-        when: currentTime(),
-        who: "Reject",
-        text: `${samplesWord(cardSamples.length)} from ${farmCard.farmName} rejected.`,
-    });
-    closeCard();
+    demoState.openCard = null;
     renderAll();
 }
 
-function rowStatus(sheetRow, savedIndex) {
+function rowStatus(sheetRow, rowIndex) {
     const key = codeKey(sheetRow.cells.bfiCode);
     if (demoState.existingCodes.has(key)) return { label: "Already existed", tone: "grey" };
-    const savedRow = demoState.savedRows[savedIndex];
+    const savedRow = demoState.savedRows[rowIndex];
     const savedSame = savedRow && savedRow.rowId === sheetRow.rowId && JSON.stringify(savedRow.cells) === JSON.stringify(sheetRow.cells);
     if (!savedSame) return { label: "Not saved yet", tone: "blue" };
     if (demoState.liveSamples.some((sample) => sample.bfiCode === key)) return { label: "Live", tone: "green" };
-    if (demoState.waitingSamples.some((sample) => sample.bfiCode === key)) return { label: "Waiting for approval", tone: "purple" };
-    if (demoState.heldRows.some((heldRow) => heldRow.sheetRowNumber === savedIndex + 2)) return { label: "Needs fixing", tone: "amber" };
+    if (demoState.waitingSamples.some((sample) => sample.bfiCode === key)) return { label: "In the Sample Inbox", tone: "purple" };
+    if (demoState.heldRows.some((heldRow) => heldRow.sheetRowNumber === rowIndex + 4)) return { label: "Needs fixing", tone: "amber" };
     if (demoState.fileVersion !== demoState.lastSeenVersion) return { label: "Saved, not checked yet", tone: "blue" };
+    if (demoState.rejectedCodes.has(key)) return { label: "Rejected, comes back after the next save", tone: "amber" };
     return { label: "Not picked up", tone: "grey" };
 }
 
@@ -433,17 +451,18 @@ function renderSheet() {
     const headerCells = SHEET_COLUMNS.map((column) => `<th>${escapeHtml(column.label)}</th>`).join("");
     const bodyRows = demoState.sheetRows
         .map((sheetRow, rowIndex) => {
+            const sheetRowNumber = rowIndex + 4;
             const status = rowStatus(sheetRow, rowIndex);
-            const isExisting = status.tone === "grey" && status.label === "Already existed";
+            const isExisting = status.label === "Already existed";
             const inputCells = SHEET_COLUMNS.map(
                 (column) =>
-                    `<td><input data-row-id="${sheetRow.rowId}" data-cell-key="${column.key}" value="${escapeHtml(sheetRow.cells[column.key])}" aria-label="Row ${rowIndex + 2} ${escapeHtml(column.label)}"></td>`,
+                    `<td><input data-row-id="${sheetRow.rowId}" data-cell-key="${column.key}" value="${escapeHtml(sheetRow.cells[column.key])}" aria-label="Row ${sheetRowNumber} ${escapeHtml(column.label)}"></td>`,
             ).join("");
             const removeButton = isExisting
                 ? ""
-                : `<button type="button" class="link-button" data-remove-row="${sheetRow.rowId}" aria-label="Delete row ${rowIndex + 2}">Delete</button>`;
+                : `<button type="button" class="sheet-delete" data-remove-row="${sheetRow.rowId}" aria-label="Delete row ${sheetRowNumber}">Delete</button>`;
             return `<tr class="${isExisting ? "existing-row" : ""}">
-                <td class="row-number">${rowIndex + 2}</td>
+                <td class="row-number">${sheetRowNumber}</td>
                 <td class="side-cell"><span class="pill pill-${status.tone}">${status.label}</span></td>
                 ${inputCells}
                 <td class="side-cell">${removeButton}</td>
@@ -453,10 +472,13 @@ function renderSheet() {
 
     document.querySelector("#sheet-table-wrap").innerHTML = `
         <table class="sheet-table">
-            <thead><tr><th class="row-number">1</th><th class="status-head">What the website did</th>${headerCells}<th></th></tr></thead>
+            <thead><tr><th class="row-number">3</th><th class="status-head">What the website did</th>${headerCells}<th></th></tr></thead>
             <tbody>${bodyRows}</tbody>
         </table>`;
+    renderSaveState();
+}
 
+function renderSaveState() {
     const saveState = document.querySelector("#save-state");
     if (demoState.unsavedChanges) {
         saveState.textContent = "You have changes that are not saved. The website only sees the saved file.";
@@ -470,165 +492,208 @@ function renderSheet() {
     document.querySelector("#save-button").disabled = !demoState.unsavedChanges;
 }
 
-function renderCheckStatus() {
-    const latestCheck = demoState.latestCheck;
-    const changedLine = latestCheck.changedAt
-        ? `<div class="small muted">File last changed: ${shortDateTime(latestCheck.changedAt)}</div>`
-        : "";
-    document.querySelector("#check-status").innerHTML = `
-        <div><span class="muted">Last checked: </span>${shortDateTime(latestCheck.checkedAt)} <span class="muted">(Box: Sample_Master_File.xlsx)</span></div>
-        <div>${escapeHtml(latestCheck.message)}</div>
-        ${changedLine}
-        <div class="small muted">Next automatic check: ${shortDateTime(demoState.nextCheckAt)}</div>`;
-    document.querySelector("#demo-clock").textContent = shortDateTime(currentTime());
-}
-
-function renderHeldRows() {
-    const heldBox = document.querySelector("#held-rows");
-    if (demoState.heldRows.length === 0) {
-        heldBox.innerHTML = "";
-        return;
-    }
+function heldRowsMarkup() {
+    if (demoState.heldRows.length === 0) return "";
     const heldLines = demoState.heldRows
         .map(
-            (heldRow) => `<tr>
-                <td>${heldRow.sheetRowNumber}</td>
-                <td class="mono">${escapeHtml(heldRow.bfiCode || "none")}</td>
-                <td>${heldRow.reasons.map((reason) => `<div>${escapeHtml(reason)}</div>`).join("")}</td>
+            (heldRow) => `<tr class="border-t border-amber-200 align-top">
+                <td class="py-1 pr-3">${heldRow.sheetRowNumber}</td>
+                <td class="py-1 pr-3 font-mono">${escapeHtml(heldRow.bfiCode || "none")}</td>
+                <td class="py-1">${heldRow.reasons.map((reason) => `<div>${escapeHtml(reason)}</div>`).join("")}</td>
             </tr>`,
         )
         .join("");
-    heldBox.innerHTML = `
-        <div class="held-box">
-            <p class="strong">Rows that need fixing in the Excel file. Once fixed, the next check picks them up.</p>
-            <div class="table-scroll">
-                <table class="held-table">
-                    <thead><tr><th>Row</th><th>BFI code</th><th>Reason</th></tr></thead>
-                    <tbody>${heldLines}</tbody>
-                </table>
+    return `<div class="rounded border border-amber-300 bg-amber-50 p-3 text-amber-900">
+        <p class="text-sm font-semibold">Rows that need fixing in the Excel file. Once fixed, the next check picks them up.</p>
+        <table class="mt-2 w-full text-sm">
+            <thead><tr class="text-left text-xs"><th class="py-1 pr-3">Row</th><th class="py-1 pr-3">BFI code</th><th class="py-1">Reason</th></tr></thead>
+            <tbody>${heldLines}</tbody>
+        </table>
+    </div>`;
+}
+
+function renderStatusArea() {
+    const latestCheck = demoState.latestCheck;
+    const changedLine = latestCheck.changedAt
+        ? `<div class="text-xs text-muted-foreground">File last changed: ${shortDateTime(latestCheck.changedAt)}</div>`
+        : "";
+    document.querySelector("#intake-status-area").innerHTML = `<div class="space-y-4">
+        <div class="flex flex-wrap items-start justify-between gap-3 rounded border p-4">
+            <div class="space-y-1 text-sm">
+                <div><span class="text-muted-foreground">Last checked: </span>${shortDateTime(latestCheck.checkedAt)}<span class="text-muted-foreground"> (${SOURCE_DESCRIPTION})</span></div>
+                <div>${escapeHtml(latestCheck.message)}</div>
+                ${changedLine}
             </div>
-        </div>`;
+            <button type="button" class="${BUTTON_PRIMARY}" id="check-now" ${demoState.checking ? "disabled" : ""}>${demoState.checking ? ICONS.loader : ICONS.refresh}Check now</button>
+        </div>
+        ${heldRowsMarkup()}
+    </div>`;
 }
 
-function renderInbox() {
+function renderInboxArea() {
     const waitingCards = demoState.farmCards.filter((farmCard) => farmCard.status === "waiting");
-    const waitingTotal = demoState.waitingSamples.length;
-    document.querySelector("#inbox-count").textContent =
-        waitingTotal > 0 ? `${samplesWord(waitingTotal)} waiting for approval` : "";
-    const inboxCards = document.querySelector("#inbox-cards");
-    if (waitingCards.length === 0) {
-        inboxCards.innerHTML = `<p class="muted small">No samples are waiting for approval.</p>`;
-        return;
-    }
-    inboxCards.innerHTML = waitingCards
-        .map((farmCard) => {
-            const cardSamples = demoState.waitingSamples.filter((sample) => sample.cardId === farmCard.cardId);
-            const receivedDates = cardSamples.map((sample) => sample.receivedDate.getTime());
-            const firstDate = shortDate(new Date(Math.min(...receivedDates)));
-            const lastDate = shortDate(new Date(Math.max(...receivedDates)));
-            const receivedText = firstDate === lastDate ? firstDate : `${firstDate} to ${lastDate}`;
-            return `<button type="button" class="farm-card" data-open-card="${farmCard.cardId}">
-                <span class="farm-card-name">${escapeHtml(farmCard.farmName)}</span>
-                <span class="small">${samplesWord(cardSamples.length)} waiting</span>
-                <span class="small muted">Received ${receivedText}</span>
-                <span class="farm-card-action">Review and approve</span>
-            </button>`;
-        })
-        .join("");
+    const cardsMarkup =
+        waitingCards.length === 0
+            ? `<p class="text-sm text-muted-foreground">No samples are waiting for approval.</p>`
+            : `<div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">${waitingCards
+                  .map((farmCard) => {
+                      const samples = cardSamples(farmCard.cardId);
+                      const receivedTimes = samples.map((sample) => sample.receivedDate.getTime());
+                      const firstDate = shortDate(new Date(Math.min(...receivedTimes)));
+                      const lastDate = shortDate(new Date(Math.max(...receivedTimes)));
+                      const receivedText = firstDate === lastDate ? `Received ${firstDate}` : `Received ${firstDate} to ${lastDate}`;
+                      return `<button type="button" data-open-card="${farmCard.cardId}" class="rounded-lg border bg-background p-4 text-left shadow-sm transition hover:border-primary hover:shadow">
+                          <div class="font-semibold">${escapeHtml(farmCard.farmName)}</div>
+                          <div class="mt-1 text-sm">${samplesWord(samples.length)} waiting</div>
+                          <div class="mt-1 text-xs text-muted-foreground">${receivedText}</div>
+                          <div class="mt-3 text-sm font-medium text-primary">Review and approve</div>
+                      </button>`;
+                  })
+                  .join("")}</div>`;
+    document.querySelector("#intake-inbox-area").innerHTML = `
+        <h3 class="mb-3 text-lg font-semibold">Sample Inbox <span class="text-sm font-normal text-muted-foreground">${samplesWord(demoState.waitingSamples.length)} waiting for approval</span></h3>
+        ${cardsMarkup}`;
 }
 
-function renderHistory() {
-    const historyList = document.querySelector("#history-list");
-    if (demoState.history.length === 0) {
-        historyList.innerHTML = `<li class="muted">Nothing yet.</li>`;
-        return;
-    }
-    historyList.innerHTML = demoState.history
-        .map(
-            (historyLine) =>
-                `<li><span class="muted">${shortDateTime(historyLine.when)}</span> <span class="strong">${escapeHtml(historyLine.who)}:</span> ${escapeHtml(historyLine.text)}</li>`,
-        )
-        .join("");
+function renderUploadArea() {
+    const uploadBody = demoState.showManualUpload
+        ? `<div class="mt-3"><div class="space-y-4">
+            <p class="text-sm text-muted-foreground">Only needed if the automatic check cannot reach the file. Choose the whole Sample Master File (.xlsx or .csv); only new rows are added.</p>
+            <div class="flex flex-wrap items-center gap-3">
+                <input type="file" accept=".xlsx,.xlsm,.csv" class="text-sm">
+                <button type="button" class="${BUTTON_OUTLINE}" data-demo-only="In this demo the file always comes from Box. Use the Excel file at the bottom of the screen.">${ICONS.upload}Upload</button>
+            </div>
+        </div></div>`
+        : "";
+    document.querySelector("#intake-upload-area").innerHTML = `
+        <button type="button" class="flex items-center text-sm font-medium" data-toggle="upload">${demoState.showManualUpload ? ICONS.chevronDown : ICONS.chevronRight}Upload a file by hand</button>
+        ${uploadBody}`;
 }
 
-function renderLiveSamples() {
-    const liveBox = document.querySelector("#live-table");
-    if (demoState.liveSamples.length === 0) {
-        liveBox.innerHTML = `<p class="muted small">No samples have been approved in this demo yet.</p>`;
-        return;
-    }
-    const liveLines = demoState.liveSamples
+function renderHistoryArea() {
+    const historyArea = document.querySelector("#intake-history-area");
+    const historyLines = demoState.recentUploads
         .map(
-            (sample) => `<tr>
-                <td class="mono">${escapeHtml(sample.bfiCode)}</td>
-                <td>${escapeHtml(sample.tubeLabel)}</td>
-                <td>${escapeHtml(sample.farmName)}</td>
-                <td>${escapeHtml(sample.foodDescription)}</td>
-                <td>${escapeHtml(sample.projectName)}</td>
-                <td>${shortDateTime(sample.approvedAt)}</td>
+            (upload) => `<tr class="border-b">
+                <td class="py-1 pr-3 whitespace-nowrap">${shortDateTime(upload.uploadedAt)}</td>
+                <td class="py-1 pr-3">${escapeHtml(upload.uploadedBy || "Automatic check")}</td>
+                <td class="py-1 pr-3">${FILE_NAME}</td>
+                <td class="py-1">${escapeHtml(upload.summary)}</td>
             </tr>`,
         )
         .join("");
-    liveBox.innerHTML = `
-        <div class="table-scroll">
-            <table class="plain-table">
-                <thead><tr><th>BFI code</th><th>Tube label</th><th>Farm</th><th>Food</th><th>Project</th><th>Approved</th></tr></thead>
-                <tbody>${liveLines}</tbody>
-            </table>
+    historyArea.innerHTML = `
+        <button type="button" class="flex items-center text-sm font-medium" data-toggle="history">${demoState.showHistory ? ICONS.chevronDown : ICONS.chevronRight}Recent checks and uploads</button>
+        ${demoState.showHistory ? `<table class="mt-2 w-full text-sm"><tbody>${historyLines}</tbody></table>` : ""}`;
+}
+
+function samplesTableMarkup(samples) {
+    const sampleLines = samples
+        .map(
+            (sample) => `<tr class="border-b align-top">
+                <td class="py-2 pr-3 font-mono">${escapeHtml(sample.bfiCode)}</td>
+                <td class="py-2 pr-3">${escapeHtml(sample.tubeLabel)}</td>
+                <td class="py-2 pr-3">${escapeHtml(sample.sampleType)}</td>
+                <td class="py-2 pr-3">${escapeHtml(sample.foodDescription)}</td>
+                <td class="py-2 pr-3">${escapeHtml(sample.practices.join(", "))}</td>
+                <td class="py-2 pr-3">${shortDate(sample.receivedDate)}</td>
+                <td class="py-2">${escapeHtml(sample.storage)}</td>
+            </tr>`,
+        )
+        .join("");
+    return `<div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="border-b text-left text-xs text-muted-foreground">
+                    <th class="py-2 pr-3">BFI code</th><th class="py-2 pr-3">Tube label</th><th class="py-2 pr-3">Type</th>
+                    <th class="py-2 pr-3">Food</th><th class="py-2 pr-3">Practices</th><th class="py-2 pr-3">Received</th><th class="py-2">Storage</th>
+                </tr>
+            </thead>
+            <tbody>${sampleLines}</tbody>
+        </table>
+    </div>`;
+}
+
+function reviewButtonsMarkup(openCard, samples) {
+    if (openCard.confirmingReject) {
+        return `<span class="text-sm text-muted-foreground">Remove these samples from the waiting area? They come back on the next upload.</span>
+            <button type="button" class="${BUTTON_OUTLINE}" data-keep-card>Keep</button>
+            <button type="button" class="${BUTTON_DESTRUCTIVE}" data-reject-card="${openCard.cardId}">Yes, reject</button>`;
+    }
+    return `<button type="button" class="${BUTTON_OUTLINE}" data-confirm-reject>Reject</button>
+        <button type="button" class="${BUTTON_PRIMARY}" data-approve-card="${openCard.cardId}">Approve ${samplesWord(samples.length)}</button>`;
+}
+
+function renderDialog() {
+    const dialogRoot = document.querySelector("#dialog-root");
+    const openCard = demoState.openCard;
+    if (!openCard) {
+        dialogRoot.innerHTML = "";
+        document.body.style.overflow = "";
+        return;
+    }
+    const approved = Boolean(openCard.approvedSamples);
+    const samples = approved ? openCard.approvedSamples : cardSamples(openCard.cardId);
+    const description = approved
+        ? `${samplesWord(samples.length)} approved and added to ${escapeHtml(openCard.projectName)}.`
+        : "Check the samples below. Nothing is live until you press Approve.";
+    const body = approved
+        ? `<div class="space-y-3">
+            <p class="text-sm">The samples are live and were grouped automatically. Move them between groups below if needed.</p>
+            <div class="rounded border p-3"><p class="mb-2 text-sm font-semibold">${escapeHtml(openCard.projectName)}</p>${samplesTableMarkup(samples)}</div>
+            <p class="text-xs text-muted-foreground">On the real website the drag and drop group screen appears here.</p>
+            <div class="flex justify-end"><button type="button" class="${BUTTON_PRIMARY}" data-close-card>Done</button></div>
+        </div>`
+        : `${samplesTableMarkup(samples)}
+        <div class="flex flex-wrap items-center justify-end gap-2 pt-2">${reviewButtonsMarkup(openCard, samples)}</div>`;
+
+    dialogRoot.innerHTML = `
+        <div class="fixed inset-0 z-50 bg-black/80" data-close-card data-state="open"></div>
+        <div role="dialog" aria-modal="true" aria-labelledby="farm-card-title" data-state="open" class="fixed left-[50%] top-[50%] z-50 grid w-full translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg duration-200 sm:rounded-lg max-w-5xl max-h-[90vh] overflow-y-auto">
+            <div class="flex flex-col space-y-1.5 text-center sm:text-left">
+                <h2 id="farm-card-title" class="text-lg font-semibold leading-none tracking-tight">${escapeHtml(openCard.farmName)}</h2>
+                <p class="text-sm text-muted-foreground">${description}</p>
+            </div>
+            ${body}
+            <button type="button" data-close-card class="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2">${ICONS.close}<span class="sr-only">Close</span></button>
         </div>`;
+    document.body.style.overflow = "hidden";
 }
 
 function renderAll() {
+    renderStatusArea();
+    renderInboxArea();
+    renderUploadArea();
+    renderHistoryArea();
+    renderDialog();
     renderSheet();
-    renderCheckStatus();
-    renderHeldRows();
-    renderInbox();
-    renderHistory();
-    renderLiveSamples();
 }
 
-function openCard(cardId) {
+function openFarmCard(cardId) {
     const farmCard = demoState.farmCards.find((knownCard) => knownCard.cardId === cardId);
-    const cardSamples = demoState.waitingSamples.filter((sample) => sample.cardId === cardId);
-    demoState.openCardId = cardId;
-    const sampleLines = cardSamples
-        .map(
-            (sample) => `<tr>
-                <td class="mono">${escapeHtml(sample.bfiCode)}</td>
-                <td>${escapeHtml(sample.tubeLabel)}</td>
-                <td>${escapeHtml(sample.sampleType)}</td>
-                <td>${escapeHtml(sample.foodDescription)}</td>
-                <td>${escapeHtml(sample.practices.join(", "))}</td>
-                <td>${shortDate(sample.receivedDate)}</td>
-            </tr>`,
-        )
-        .join("");
-    const dialog = document.querySelector("#farm-card-dialog");
-    dialog.innerHTML = `
-        <div class="dialog-head">
-            <div>
-                <h3>${escapeHtml(farmCard.farmName)}</h3>
-                <p class="muted small">Check the samples below. Nothing is live until you press Approve.</p>
-            </div>
-            <button type="button" class="close-button" data-close-card aria-label="Close">&times;</button>
-        </div>
-        <div class="table-scroll">
-            <table class="plain-table">
-                <thead><tr><th>BFI code</th><th>Tube label</th><th>Type</th><th>Food</th><th>Practices</th><th>Received</th></tr></thead>
-                <tbody>${sampleLines}</tbody>
-            </table>
-        </div>
-        <div class="dialog-actions">
-            <button type="button" class="outline-button" data-reject-card="${cardId}">Reject</button>
-            <button type="button" class="dark-button" data-approve-card="${cardId}">Approve ${samplesWord(cardSamples.length)}</button>
-        </div>`;
-    dialog.showModal();
+    demoState.openCard = { cardId, farmName: farmCard.farmName, confirmingReject: false };
+    renderDialog();
 }
 
-function closeCard() {
-    const dialog = document.querySelector("#farm-card-dialog");
-    if (dialog.open) dialog.close();
-    demoState.openCardId = null;
+function closeFarmCard() {
+    demoState.openCard = null;
+    renderDialog();
+}
+
+function setExcelOpen(shouldOpen) {
+    document.querySelector("#excel-panel").hidden = !shouldOpen;
+    document.querySelector("#excel-backdrop").hidden = !shouldOpen;
+    if (shouldOpen) renderSheet();
+}
+
+function showToast(message) {
+    const toast = document.querySelector("#demo-toast");
+    toast.textContent = message;
+    toast.hidden = false;
+    window.clearTimeout(demoState.toastTimer);
+    demoState.toastTimer = window.setTimeout(() => {
+        toast.hidden = true;
+    }, 4000);
 }
 
 function handleSheetTyping(inputEvent) {
@@ -638,22 +703,50 @@ function handleSheetTyping(inputEvent) {
     sheetRow.cells[input.dataset.cellKey] = input.value;
     if (!demoState.unsavedChanges) {
         demoState.unsavedChanges = true;
-        const saveState = document.querySelector("#save-state");
-        saveState.textContent = "You have changes that are not saved. The website only sees the saved file.";
-        saveState.className = "save-state unsaved";
-        document.querySelector("#save-button").disabled = false;
+        renderSaveState();
     }
 }
 
 function handleClicks(clickEvent) {
-    const clicked = clickEvent.target.closest("button");
+    const clicked = clickEvent.target.closest("button, a, [data-close-card]");
     if (!clicked) return;
-    const { removeRow: removeRowId, openCard: openCardId, approveCard: approveCardId, rejectCard: rejectCardId } = clicked.dataset;
-    if (removeRowId) removeRow(Number(removeRowId));
-    else if (openCardId) openCard(Number(openCardId));
-    else if (approveCardId) approveCard(Number(approveCardId));
-    else if (rejectCardId) rejectCard(Number(rejectCardId));
-    else if ("closeCard" in clicked.dataset) closeCard();
+    const clickedData = clicked.dataset;
+
+    if (clickedData.demoOnly) {
+        clickEvent.preventDefault();
+        showToast(clickedData.demoOnly);
+    } else if (clicked.id === "check-now") pressCheckNow();
+    else if (clicked.id === "mobile-menu-button" || clicked.id === "mobile-menu-close") toggleSidebar();
+    else if (clickedData.openCard) openFarmCard(Number(clickedData.openCard));
+    else if (clickedData.approveCard) approveCard(Number(clickedData.approveCard));
+    else if (clickedData.rejectCard) rejectCard(Number(clickedData.rejectCard));
+    else if ("confirmReject" in clickedData) setConfirmingReject(true);
+    else if ("keepCard" in clickedData) setConfirmingReject(false);
+    else if ("closeCard" in clickedData) closeFarmCard();
+    else if (clickedData.removeRow) removeRow(Number(clickedData.removeRow));
+    else if (clickedData.toggle === "upload") {
+        demoState.showManualUpload = !demoState.showManualUpload;
+        renderUploadArea();
+    } else if (clickedData.toggle === "history") {
+        demoState.showHistory = !demoState.showHistory;
+        renderHistoryArea();
+    }
+}
+
+function setConfirmingReject(isConfirming) {
+    demoState.openCard.confirmingReject = isConfirming;
+    renderDialog();
+}
+
+function toggleSidebar() {
+    const sidebar = document.querySelector("#site-sidebar");
+    sidebar.style.transform = sidebar.style.transform ? "" : "translateX(0)";
+}
+
+function handleKeys(keyEvent) {
+    if (keyEvent.key !== "Escape") return;
+    if (demoState.openCard) closeFarmCard();
+    else setExcelOpen(false);
 }
 
 function startDemo() {
@@ -661,26 +754,26 @@ function startDemo() {
     demoState.savedRows = copyRows(demoState.sheetRows);
     demoState.sheetRows.forEach((sheetRow) => demoState.existingCodes.add(codeKey(sheetRow.cells.bfiCode)));
 
-    const firstReadAt = addMinutes(currentTime(), -45);
-    demoState.history.push({
-        when: firstReadAt,
-        who: "First read",
-        text: `First read of the file: ${demoState.existingCodes.size} BFI codes marked as existing. New rows added from now on will be picked up.`,
+    const now = currentTime();
+    demoState.recentUploads.push({
+        uploadedAt: addMinutes(now, -45),
+        uploadedBy: "",
+        summary: `First read: ${demoState.existingCodes.size} codes marked as existing`,
     });
-    demoState.latestCheck = { checkedAt: addMinutes(currentTime(), -15), message: "No change since the last check.", changedAt: null };
+    demoState.latestCheck = { checkedAt: addMinutes(now, -15), message: "No change since the last check.", changedAt: null };
     demoState.nextCheckAt = addMinutes(demoState.latestCheck.checkedAt, CHECK_EVERY_MINUTES);
 
+    document.querySelector("#open-excel").addEventListener("click", () => setExcelOpen(true));
+    document.querySelector("#close-excel").addEventListener("click", () => setExcelOpen(false));
+    document.querySelector("#excel-backdrop").addEventListener("click", () => setExcelOpen(false));
     document.querySelector("#add-good-row").addEventListener("click", addGoodExample);
     document.querySelector("#add-problem-row").addEventListener("click", addProblemExample);
     document.querySelector("#add-empty-row").addEventListener("click", () => addRow(null));
     document.querySelector("#save-button").addEventListener("click", saveSheet);
-    document.querySelector("#check-now").addEventListener("click", () => runCheck("button"));
     document.querySelector("#skip-hour").addEventListener("click", skipAheadOneHour);
     document.querySelector("#sheet-table-wrap").addEventListener("input", handleSheetTyping);
     document.addEventListener("click", handleClicks);
-    document.querySelector("#farm-card-dialog").addEventListener("close", () => {
-        demoState.openCardId = null;
-    });
+    document.addEventListener("keydown", handleKeys);
     renderAll();
 }
 
