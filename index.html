@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>CHNS Sample Entry Demo</title>
+    <link rel="stylesheet" href="demo/demo.css">
+</head>
+<body>
+    <div class="demo-banner">DEMO: every farm, sample and BFI code on this page is made up. Nothing is saved. Reload the page to start again.</div>
+
+    <div class="page">
+        <aside class="sidebar">
+            <div class="sidebar-title">Center for Human Nutrition Studies</div>
+            <nav class="sidebar-menu">
+                <span>Home</span>
+                <span>Results &amp; Analysis</span>
+                <span>Tables</span>
+                <span class="active">Insert Data</span>
+                <span>Sample Intake Form</span>
+                <span>Tracker</span>
+                <span>Sample Status &amp; Weights</span>
+                <span>Manage Farms</span>
+            </nav>
+        </aside>
+
+        <main class="main">
+            <h1>Insert Data</h1>
+            <div class="tabs">
+                <span>Clean Data Entry</span>
+                <span>Data to be Cleaned</span>
+                <span class="active">Sample Entry</span>
+                <span>Import Excel</span>
+            </div>
+
+            <section class="card guide">
+                <h2>How sample entry works now</h2>
+                <ol class="guide-steps">
+                    <li><span class="step-number">1</span><span><b>A lab member adds a row</b> to the Sample Master File in Box and saves it, the same as today.</span></li>
+                    <li><span class="step-number">2</span><span><b>The website reads the file by itself</b> once an hour. Press Check now to read it straight away.</span></li>
+                    <li><span class="step-number">3</span><span><b>Good rows wait in the Sample Inbox</b>, one card per farm. Rows with a problem are listed with the reason.</span></li>
+                    <li><span class="step-number">4</span><span><b>Someone presses Approve.</b> Only then do the samples go live.</span></li>
+                </ol>
+                <p class="small muted">Try it: press "Add a good row", then "Save to Box", then "Check now", then open the farm card and press Approve.</p>
+            </section>
+
+            <section class="card" id="box-file">
+                <div class="place-tag box-tag">IN BOX: the Excel file lab members already use</div>
+                <h2>Sample_Master_File.xlsx</h2>
+                <p class="small muted">Grey rows were already in the file before the automation started, so they are never imported again. You can type in any cell. The purple "What the website did" column is only in this demo, to show what happened to each row; the real Excel file has no such column.</p>
+                <div class="sheet-toolbar">
+                    <button type="button" class="outline-button" id="add-good-row">Add a good row</button>
+                    <button type="button" class="outline-button" id="add-problem-row">Add a row with a problem</button>
+                    <button type="button" class="outline-button" id="add-empty-row">Add an empty row</button>
+                    <button type="button" class="green-button" id="save-button">Save to Box</button>
+                </div>
+                <p id="save-state" class="save-state"></p>
+                <div class="table-scroll sheet-scroll" id="sheet-table-wrap"></div>
+            </section>
+
+            <section class="card" id="website-panel">
+                <div class="place-tag site-tag">ON THE WEBSITE: Insert Data, Sample Entry tab</div>
+                <h2>Sample Master File</h2>
+                <p class="small muted">The website reads the Sample Master File by itself once an hour. New rows wait in the Sample Inbox until someone approves them. Press Check now to look for new rows straight away.</p>
+
+                <div class="status-row">
+                    <div id="check-status" class="status-text"></div>
+                    <div class="status-buttons">
+                        <button type="button" class="dark-button" id="check-now">Check now</button>
+                        <button type="button" class="link-button" id="skip-hour">Skip ahead to the next hourly check (demo only)</button>
+                    </div>
+                </div>
+                <p class="small muted">Demo clock: <span id="demo-clock"></span></p>
+
+                <div id="held-rows"></div>
+
+                <h3>Sample Inbox <span class="muted small" id="inbox-count"></span></h3>
+                <div class="inbox-cards" id="inbox-cards"></div>
+
+                <details class="folded">
+                    <summary>Recent checks and uploads</summary>
+                    <ul class="history-list" id="history-list"></ul>
+                </details>
+            </section>
+
+            <section class="card" id="live-samples">
+                <div class="place-tag live-tag">LIVE: samples after Approve</div>
+                <h2>Approved samples</h2>
+                <p class="small muted">On the real website these appear in the Tracker and the sample tables, grouped into one project per farm card.</p>
+                <div id="live-table"></div>
+            </section>
+        </main>
+    </div>
+
+    <dialog id="farm-card-dialog" class="farm-dialog"></dialog>
+
+    <script src="demo/demo-data.js"></script>
+    <script src="demo/demo.js"></script>
+</body>
+</html>
