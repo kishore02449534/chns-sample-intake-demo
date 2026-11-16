@@ -51,6 +51,7 @@ const demoState = {
     recentUploads: [],
     nextRowId: 1,
     nextCardId: 1,
+    nextGroupId: 1201,
     goodExampleIndex: 0,
     problemExampleIndex: 0,
     checking: false,
@@ -248,6 +249,8 @@ function checkOneRow(cells) {
             farmName: farm.farmName,
             sampleType,
             foodDescription: `${food.foodName}, ${breed}, ${cut}`,
+            foodName: food.foodName,
+            cutName: cut,
             practices,
             receivedDate,
             storage: cells.storage.trim(),
@@ -420,8 +423,33 @@ function approveCard(cardId) {
     approvedSamples.forEach((sample) => demoState.liveSamples.push({ ...sample, projectName }));
     demoState.waitingSamples = demoState.waitingSamples.filter((sample) => sample.cardId !== cardId);
     farmCard.status = "approved";
-    demoState.openCard = { cardId, farmName: farmCard.farmName, approvedSamples, projectName, confirmingReject: false };
+    const groups = buildGroups(approvedSamples);
+    demoState.openCard = {
+        cardId,
+        farmName: farmCard.farmName,
+        approvedSamples,
+        projectName,
+        confirmingReject: false,
+        groupScreen: { groups, savedGroups: copyGroups(groups), editing: false },
+    };
     renderAll();
+}
+
+function buildGroups(samples) {
+    const groupsByKey = new Map();
+    samples.forEach((sample) => {
+        const groupKey = `${sample.foodDescription}|${[...sample.practices].sort().join(",")}`;
+        if (!groupsByKey.has(groupKey)) {
+            groupsByKey.set(groupKey, { groupId: demoState.nextGroupId, groupName: "Unknown", isBenchmark: false, codes: [] });
+            demoState.nextGroupId += 1;
+        }
+        groupsByKey.get(groupKey).codes.push(sample.bfiCode);
+    });
+    return [...groupsByKey.values()];
+}
+
+function copyGroups(groups) {
+    return groups.map((group) => ({ ...group, codes: [...group.codes] }));
 }
 
 function rejectCard(cardId) {
@@ -624,6 +652,140 @@ function reviewButtonsMarkup(openCard, samples) {
         <button type="button" class="${BUTTON_PRIMARY}" data-approve-card="${openCard.cardId}">Approve ${samplesWord(samples.length)}</button>`;
 }
 
+function groupLabel(group) {
+    return group.groupName || `Group ${group.groupId}`;
+}
+
+function isoDate(when) {
+    return when.toLocaleDateString("en-CA", { timeZone: LAB_TIME_ZONE });
+}
+
+function groupSampleMarkup(sample, groupId, editing) {
+    return `<div class="border rounded-md p-2 bg-gray-50" draggable="${editing}" data-sample-code="${escapeHtml(sample.bfiCode)}" data-from-group="${groupId}">
+        <div class="text-xs text-gray-500 mb-1">${escapeHtml(sample.bfiCode)}</div>
+        <div class="text-sm font-medium truncate" title="${escapeHtml(sample.tubeLabel)}">${escapeHtml(sample.tubeLabel)}</div>
+        <div class="mt-1 grid grid-cols-2 gap-x-2 gap-y-1 text-xs">
+            <div class="text-gray-500">Date</div><div>${isoDate(sample.receivedDate)}</div>
+            <div class="text-gray-500">Species</div><div>${escapeHtml(sample.foodName)}</div>
+            <div class="text-gray-500">Cut</div><div>${escapeHtml(sample.cutName)}</div>
+            <div class="text-gray-500">Practice</div><div>${escapeHtml(sample.practices.join(", "))}</div>
+        </div>
+    </div>`;
+}
+
+function groupCardMarkup(group, samplesByCode, editing) {
+    const groupName = editing
+        ? `<input type="text" class="w-full bg-white border rounded px-2 py-1 text-sm" value="${escapeHtml(group.groupName)}" placeholder="Group ${group.groupId}" data-group-name="${group.groupId}">`
+        : `<span class="block truncate" title="${escapeHtml(groupLabel(group))}">${escapeHtml(groupLabel(group))}</span>`;
+    const sampleCards = group.codes.length === 0
+        ? `<div class="text-sm text-gray-500">No samples in this group.</div>`
+        : group.codes.map((bfiCode) => groupSampleMarkup(samplesByCode.get(bfiCode), group.groupId, editing)).join("");
+    return `<div class="flex-shrink-0 w-80 border rounded-lg shadow-sm flex flex-col h-full bg-white" data-drop-group="${group.groupId}">
+        <div class="px-3 py-2 border-b bg-gray-50 font-semibold">
+            ${groupName}
+            <label class="mt-2 inline-flex items-center gap-2 text-xs font-normal text-gray-700">
+                <input type="checkbox" class="h-4 w-4" data-group-benchmark="${group.groupId}"${group.isBenchmark ? " checked" : ""}${editing ? "" : " disabled"}>
+                <span>(Benchmark Group)</span>
+            </label>
+        </div>
+        <div class="p-3 space-y-2 overflow-y-auto flex-1">${sampleCards}</div>
+    </div>`;
+}
+
+function groupScreenMarkup(openCard) {
+    const groupScreen = openCard.groupScreen;
+    const samplesByCode = new Map(openCard.approvedSamples.map((sample) => [sample.bfiCode, sample]));
+    const editButtons = groupScreen.editing
+        ? `<div class="flex flex-col gap-2">
+            <button type="button" class="px-3 py-1 rounded border bg-white" data-group-undo>Undo / Cancel</button>
+            <button type="button" class="px-3 py-1 rounded border bg-blue-600 text-white" data-group-save>Save</button>
+        </div>`
+        : `<button type="button" class="px-3 py-1 rounded border bg-blue-50 border-blue-200 text-blue-800 hover:bg-blue-100" data-group-edit title="This will allow you to drag and drop your samples into different groups as well as change the name of any group.">Edit / Move Samples</button>`;
+    const groupCards = groupScreen.groups.map((group) => groupCardMarkup(group, samplesByCode, groupScreen.editing)).join("");
+    return `<div class="w-full h-full flex flex-col">
+        <div class="px-2 pt-1 pb-2 text-xs text-gray-600 flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span class="font-medium text-gray-700">Showing this project only</span>
+            <span class="text-gray-400">&middot;</span>
+            <span>groups and samples belonging to this project</span>
+        </div>
+        <div class="flex-1 overflow-x-auto">
+            <div class="flex gap-4 p-2 h-full items-center">
+                <div class="mr-2 flex flex-col gap-2">
+                    ${editButtons}
+                    <button type="button" class="px-3 py-1 rounded border bg-green-50 border-green-200 text-green-800 hover:bg-green-100" data-group-create title="This will allow you to further delineate your samples by creating and naming a new group that you will be able to move your samples into.">Create New Group</button>
+                </div>
+                ${groupCards}
+            </div>
+        </div>
+    </div>`;
+}
+
+function setGroupEditing(isEditing) {
+    demoState.openCard.groupScreen.editing = isEditing;
+    renderDialog();
+}
+
+function saveGroups() {
+    const groupScreen = demoState.openCard.groupScreen;
+    groupScreen.savedGroups = copyGroups(groupScreen.groups);
+    setGroupEditing(false);
+}
+
+function undoGroups() {
+    const groupScreen = demoState.openCard.groupScreen;
+    groupScreen.groups = copyGroups(groupScreen.savedGroups);
+    setGroupEditing(false);
+}
+
+function createGroup() {
+    const groupScreen = demoState.openCard.groupScreen;
+    groupScreen.groups.push({ groupId: demoState.nextGroupId, groupName: "", isBenchmark: false, codes: [] });
+    demoState.nextGroupId += 1;
+    setGroupEditing(true);
+}
+
+function findGroup(groupId) {
+    return demoState.openCard.groupScreen.groups.find((group) => group.groupId === Number(groupId));
+}
+
+function moveSample(bfiCode, fromGroupId, toGroupId) {
+    if (fromGroupId === toGroupId) return;
+    const fromGroup = findGroup(fromGroupId);
+    const toGroup = findGroup(toGroupId);
+    if (!fromGroup || !toGroup || !fromGroup.codes.includes(bfiCode)) return;
+    fromGroup.codes = fromGroup.codes.filter((code) => code !== bfiCode);
+    toGroup.codes.push(bfiCode);
+    renderDialog();
+}
+
+function groupScreenIsEditing() {
+    return Boolean(demoState.openCard && demoState.openCard.groupScreen && demoState.openCard.groupScreen.editing);
+}
+
+function handleDragStart(dragEvent) {
+    const sampleCard = dragEvent.target.closest("[data-sample-code]");
+    if (!sampleCard || !groupScreenIsEditing()) return;
+    dragEvent.dataTransfer.setData("text/plain", JSON.stringify({ bfiCode: sampleCard.dataset.sampleCode, fromGroupId: sampleCard.dataset.fromGroup }));
+}
+
+function handleDragOver(dragEvent) {
+    if (groupScreenIsEditing() && dragEvent.target.closest("[data-drop-group]")) dragEvent.preventDefault();
+}
+
+function handleDrop(dragEvent) {
+    const groupCard = dragEvent.target.closest("[data-drop-group]");
+    if (!groupCard || !groupScreenIsEditing()) return;
+    dragEvent.preventDefault();
+    const dragged = JSON.parse(dragEvent.dataTransfer.getData("text/plain") || "{}");
+    if (dragged.bfiCode) moveSample(dragged.bfiCode, dragged.fromGroupId, groupCard.dataset.dropGroup);
+}
+
+function handleGroupTyping(inputEvent) {
+    const field = inputEvent.target;
+    if (field.dataset.groupName) findGroup(field.dataset.groupName).groupName = field.value;
+    if (field.dataset.groupBenchmark) findGroup(field.dataset.groupBenchmark).isBenchmark = field.checked;
+}
+
 function renderDialog() {
     const dialogRoot = document.querySelector("#dialog-root");
     const openCard = demoState.openCard;
@@ -640,8 +802,7 @@ function renderDialog() {
     const body = approved
         ? `<div class="space-y-3">
             <p class="text-sm">The samples are live and were grouped automatically. Move them between groups below if needed.</p>
-            <div class="rounded border p-3"><p class="mb-2 text-sm font-semibold">${escapeHtml(openCard.projectName)}</p>${samplesTableMarkup(samples)}</div>
-            <p class="text-xs text-muted-foreground">On the real website the drag and drop group screen appears here.</p>
+            ${groupScreenMarkup(openCard)}
             <div class="flex justify-end"><button type="button" class="${BUTTON_PRIMARY}" data-close-card>Done</button></div>
         </div>`
         : `${samplesTableMarkup(samples)}
@@ -724,6 +885,10 @@ function handleClicks(clickEvent) {
     else if ("keepCard" in clickedData) setConfirmingReject(false);
     else if ("closeCard" in clickedData) closeFarmCard();
     else if (clickedData.removeRow) removeRow(Number(clickedData.removeRow));
+    else if ("groupEdit" in clickedData) setGroupEditing(true);
+    else if ("groupSave" in clickedData) saveGroups();
+    else if ("groupUndo" in clickedData) undoGroups();
+    else if ("groupCreate" in clickedData) createGroup();
     else if (clickedData.toggle === "upload") {
         demoState.showManualUpload = !demoState.showManualUpload;
         renderUploadArea();
@@ -774,6 +939,12 @@ function startDemo() {
     document.querySelector("#sheet-table-wrap").addEventListener("input", handleSheetTyping);
     document.addEventListener("click", handleClicks);
     document.addEventListener("keydown", handleKeys);
+    const dialogRoot = document.querySelector("#dialog-root");
+    dialogRoot.addEventListener("dragstart", handleDragStart);
+    dialogRoot.addEventListener("dragover", handleDragOver);
+    dialogRoot.addEventListener("drop", handleDrop);
+    dialogRoot.addEventListener("input", handleGroupTyping);
+    dialogRoot.addEventListener("change", handleGroupTyping);
     renderAll();
 }
 
